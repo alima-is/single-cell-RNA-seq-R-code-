@@ -1,0 +1,135 @@
+library(TCGAbiolinks)
+library(survminer)
+library(survival)
+library(SummarizedExperiment)
+library(tidyverse)
+library(DESeq2)
+
+# load in clinical data 
+TCGA_clinical<- GDCquery_clinic("TCGA-GBM")
+
+# Create necessary survival variables for TCGA 
+TCGA_clinical$deceased <- ifelse(TCGA_clinical$vital_status == "Alive", FALSE, TRUE)
+TCGA_clinical$overall_survival <- ifelse(TCGA_clinical$vital_status == "Alive",
+                                             TCGA_clinical$days_to_last_follow_up,
+                                             TCGA_clinical$days_to_death)
+getProjectSummary('TCGA-GBM')
+
+
+# Query RNA-Seq expression data for GBM
+query_gbm <- GDCquery(
+  project = "TCGA-GBM",
+  data.category = "Transcriptome Profiling",
+  data.type = 'Gene Expression Quantification', 
+  sample.type = 'Recurrent Tumor')
+
+# get barcodes from gbm samples
+output_gbm <- getResults(query_gbm)
+tumor <- output_gbm$cases
+
+# Download and prepare gene expression data
+query_gbm <- GDCquery(
+  project = "TCGA-GBM",
+  data.category = "Transcriptome Profiling",
+  experimental.strategy = "RNA-Seq",
+  data.type = "Gene Expression Quantification",
+  access = "open",
+  barcode = tumor)
+
+# download expression data 
+GDCdownload(query_gbm)
+tcga_gbm_data <- GDCprepare(query_gbm, summarizedExperiment = TRUE)
+gbm_matrix <- assay(tcga_gbm_data, "unstranded")
+gene_metadata <- as.data.frame(rowData(tcga_gbm_data))
+coldata <- as.data.frame(colData(tcga_gbm_data))
+
+
+# VST transform counts -------------------
+dds <- DESeqDataSetFromMatrix(countData = gbm_matrix,
+                              colData = coldata,
+                              design = ~ 1)
+
+# Filter genes with low counts
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+
+# Apply variance stabilizing transformation
+vsd <- vst(dds, blind=FALSE)
+gbm_matrix_vst <- assay(vsd)
+
+## Survival analysis for each gene in the 59-gene signature ----------
+gene_list <- c("FGFBP3", "EML2", "TGFBR3", "PGK1", "BEX4", "CEBPD", "SYTL2", 
+               "PLEKHA4", "RAB6B", "AL031666", "FKBP1B", "LY96", "BHLHE40", 
+               "SOD3", "BNIP3", "EFR3B", "QPRT", "MIR100HG", "LATS2", "PMP2", 
+               "S100A10", "FOXD3-AS1", "MSMO1", "IER5L", "COL25A1", "FOSL2", 
+               "FGF11", "AC105942", "GADD45B", "ARRDC4", "ISYNA1", "FAM162A", 
+               "RARA", "MEF2C-AS2", "ADAMTS1", "TLE3", "SLC2A3", "CD44", 
+               "HMGA1", "TPM2", "BASP1", "ARL4C", "PDIA5", "NDUFA4L2", "COL18A1", 
+               "COL9A2", "HES1", "KLF10", "CXADR", "PLCD3", "CRYAB", "NNMT", 
+               "CP", "MFAP4", "NRP2", "SLC16A3", "POSTN", "ANGPTL4", "MIF")
+
+# Filter the dataframe for the genes in the gene list
+gbm_matrix_df <- gbm_matrix_vst %>% 
+  as.data.frame() %>%
+  rownames_to_column(var = 'gene_id') %>%
+  gather(key = "case_id", value = "counts", -gene_id) %>%
+  left_join(., gene_metadata, by = "gene_id") %>%
+  filter(gene_name %in% gene_list)
+
+# changing name 
+gbm_data <- gbm_matrix_df
+
+gbm_data$case_id <- gsub('-01.*', '', gbm_data$case_id)
+gbm_data$case_id <- sub("^(TCGA-\\d{2}-\\d{4})-.*", "\\1", gbm_data$case_id)
+
+
+# Create a high/low expression strata based on median expression for each gene
+gbm_data <- gbm_data %>%
+  group_by(gene_name) %>%
+  mutate(strata = ifelse(counts >= median(counts), "HIGH", "LOW"))
+
+# combine dfs
+gbm_data <- merge(gbm_data, TCGA_clinical, by.x = 'case_id', by.y = 'submitter_id')
+
+#Overall SurvivalSurvival Analysis -------------------
+
+fit_overall <- survfit(Surv(overall_survival, deceased) ~ strata, data = gbm_data)
+survfit(Surv(fit_overall))
+
+# p-value
+surv_pvalue(fit_overall)
+surv_pvalue(fit_overall)
+
+
+pval_text <- "p = 0.022\nN = 13"
+
+ggsurv <- ggsurvplot(
+  fit_overall, 
+  data = gbm_data, 
+  pval = pval_text,
+  legend = c(0.8, 0.8),
+  legend.labs = c("High IGI sig", "Low IGI sig"),
+  legend.title = NULL,
+  xlab = "Days",
+  ggtheme = theme_bw() +  # Use a white background
+    theme(
+      plot.title = element_text(hjust = 0.5),  # Center title, remove legend title and grid lines
+      legend.title = element_blank(),          
+      panel.grid = element_blank()             
+    )
+)
+
+# Add the title with two lines
+ggsurv$plot <- ggsurv$plot + 
+  ggtitle(expression(atop(
+    "Intrinsic Glioblastoma Invasion Signature - TCGA-GBM", 
+    "Time to Reccurence"
+  )))
+
+# Print the plot
+ggsurv
+
+
+
+
+
