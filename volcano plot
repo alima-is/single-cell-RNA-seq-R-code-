@@ -1,0 +1,101 @@
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+  library(ggrepel)
+})
+
+# Import data ------------------------------------------------------------
+invading_neural <- readr::read_tsv("GB control vs. Invading neural.Invading neural -Remaining cells.tsv")
+
+# Auto-detect header by checking if P value column is numeric or not
+first_line <- read.delim('/corral4/main/objects/f/6/a/dataset_f6a8dbf4-0215-4628-887a-82dd3f138a33.dat', header = FALSE, nrow = 1)
+first_pvalue <- first_line[, 5]
+if (is.numeric(first_pvalue)) {
+  print("No header row detected")
+  results <- read.delim('/corral4/main/objects/f/6/a/dataset_f6a8dbf4-0215-4628-887a-82dd3f138a33.dat', header = FALSE)
+} else {
+  print("Header row detected")
+  results <- read.delim('/corral4/main/objects/f/6/a/dataset_f6a8dbf4-0215-4628-887a-82dd3f138a33.dat', header = TRUE)
+}
+
+# Format data ------------------------------------------------------------
+results <- invading_neural %>% mutate(fdr = .[[4]],
+                                      pvalue = .[[5]],
+                                      logfc = .[[2]],
+                                      labels = .[[1]])
+
+# Get names for legend
+down <- unlist(strsplit('Down,Not Sig,Up', split = ","))[1]
+notsig <- unlist(strsplit('Down,Not Sig,Up', split = ","))[2]
+up <- unlist(strsplit('Down,Not Sig,Up', split = ","))[3]
+
+# Set colours
+colours <- setNames(c("cornflowerblue", "grey", "firebrick"), c(down, notsig, up))
+
+# Create significant (sig) column
+results <- mutate(results, sig = case_when(
+  fdr < 0.05 & logfc > 1.0 ~ up,
+  fdr < 0.05 & logfc < -1.0 ~ down,
+  TRUE ~ notsig))
+
+# Specify genes to label --------------------------------------------------
+# Filter genes with p-value < 0.05 and |log2FC| > 1
+significant_genes <- results %>% filter(pvalue < 0.05 & abs(logfc) > 1)
+
+# Get top 10 significant genes by p-value
+top_genes <- significant_genes %>% slice_min(order_by = pvalue, n = 10)
+
+# Extract into vector
+top_labels <- pull(top_genes, labels)
+
+# Get 4 most downregulated genes (lowest log2FC)
+downregulated_genes <- results %>% filter(sig == down) %>% slice_min(order_by = logfc, n = 4)
+down_labels <- pull(downregulated_genes, labels)
+
+# Combine top 10 and downregulated gene labels
+all_labels <- unique(c(top_labels, down_labels))
+
+# Label only the selected genes in the results table
+results <- mutate(results, labels = ifelse(labels %in% all_labels, labels, ""))
+
+# Create plot -------------------------------------------------------------
+# Open file to save plot as PDF
+pdf("volcano_plot.pdf")
+
+# Set up base plot
+p <- ggplot(data = results, aes(x = logfc, y = -log10(pvalue))) +
+  geom_point(aes(colour = sig), alpha = 0.6, size = 2) +
+  scale_color_manual(values = colours) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black"),
+        legend.key = element_blank())
+
+
+# Add gene labels
+p <- p + geom_label_repel(data = filter(results, labels != ""), aes(label = labels),
+                          min.segment.length = 0,
+                          max.overlaps = Inf,
+                          size = 5)
+
+# Add title and axis labels
+p <- p + ggtitle('Control Vs. Neural-host Invading GB') +   
+  theme(plot.title = element_text(size = 15, hjust = 0.5))
+        
+p <- p + xlab('Log2FC') +
+  theme(axis.title.x = element_text(size = 15))  # Increase x-axis label size
+
+p <- p + ylab('-log10FDR') +
+  theme(axis.title.y = element_text(size = 15))  # Increase y-axis label size
+
+# Set legend title
+p <- p + guides(color = guide_legend(title = 'Expression')) +
+  theme(legend.title = element_text(size = 15),  # Increase legend title size
+        legend.text = element_text(size = 13)) 
+
+# Print plot
+print(p)
+
+# Close the PDF device
+dev.off()
