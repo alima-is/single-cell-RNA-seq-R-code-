@@ -1,0 +1,137 @@
+# ---------- creating a heatmap comparing environments with seurat object ----------
+# ===== goes hand in hand with 'clustering with gbm.R script ================
+gbm2 <- FindVariableFeatures(gbm2, nfeature = 100)
+# subset object
+# Subset the Seurat object
+
+Idents(gbm2) <- "new group 2"
+table(Idents(gbm2))
+gbm_subset <- subset(gbm2, idents = c("Neural Environment", "Non Neural Environment"))
+table(Idents(gbm_subset))
+gbm_subset <- ScaleData(gbm_subset)
+
+gbm_subset <- FindVariableFeatures(gbm_subset, nfeatures = 100)
+top_variable_genes <- VariableFeatures(gbm_subset)
+
+# Create the heatmap
+DoHeatmap(gbm_subset,
+          features = top_variable_genes,  # Use top 100 variable genes
+          group.by = "ident",            # Group by identity (Neural vs. Non-Neural)
+          size = 4,                      # Adjust label size
+          angle = 45,                    # Adjust label angle
+          slot = "scale.data")           # Use scaled data
+
+# PHEATMAP
+gbm_subset <- ScaleData(gbm_subset)
+head(GetAssayData(gbm_subset, slot = "scale.data"))
+# Check if all genes in top_variable_genes are in scale.data
+missing_genes <- setdiff(top_variable_genes, rownames(GetAssayData(gbm_subset, slot = "scale.data")))
+print(missing_genes)
+valid_genes <- intersect(top_variable_genes, rownames(GetAssayData(gbm_subset, slot = "scale.data")))
+heatmap_data <- GetAssayData(gbm_subset, slot = "scale.data")[valid_genes, ]
+# Load libraries
+library(Seurat)
+library(pheatmap)
+
+# Set the identity to 'new group 2'
+Idents(gbm2) <- "new group 2"
+
+# Verify the identity
+table(Idents(gbm2))
+
+# Subset the Seurat object
+gbm_subset <- subset(gbm2, idents = c("Neural Environment", "Non Neural Environment"))
+
+# Verify the subsetting
+table(Idents(gbm_subset))
+
+# Scale the data for the subsetted object
+gbm_subset <- ScaleData(gbm_subset)
+
+# Find top 100 variable genes
+gbm_subset <- FindVariableFeatures(gbm_subset, nfeatures = 500)
+top_variable_genes <- VariableFeatures(gbm_subset)
+
+# Check if all genes in top_variable_genes are in scale.data
+missing_genes <- setdiff(top_variable_genes, rownames(GetAssayData(gbm_subset, slot = "scale.data")))
+print(missing_genes)
+
+# Filter top_variable_genes to include only valid genes
+valid_genes <- intersect(top_variable_genes, rownames(GetAssayData(gbm_subset, slot = "scale.data")))
+
+# Extract scaled data for valid genes
+heatmap_data <- GetAssayData(gbm_subset, slot = "scale.data")[valid_genes, ]
+
+# Cluster genes (rows)
+gene_clusters <- hclust(dist(heatmap_data), method = "complete")
+
+# Cluster cells (columns)
+cell_clusters <- hclust(dist(t(heatmap_data)), method = "complete")
+
+# Create column annotations
+annotation_col <- data.frame(
+  Environment = Idents(gbm_subset)  # Use the identity for annotations
+)
+rownames(annotation_col) <- colnames(heatmap_data)
+
+# Create the heatmap
+pheatmap(heatmap_data,
+         color = colorRampPalette(c("blue", "white", "red"))(100),  # Color gradient
+         cluster_rows = gene_clusters,  # Use gene clustering
+         cluster_cols = cell_clusters,  # Use cell clustering
+         show_rownames = TRUE,          # Show row names (genes)
+         show_colnames = FALSE,         # Hide column names (samples)
+         annotation_col = annotation_col,  # Add column annotations
+         fontsize_row = 8,              # Font size for row names
+         main = "Neural Environment vs. Non-Neural Environment")  # Title
+
+# force group by env
+# Load libraries
+library(Seurat)
+library(pheatmap)
+
+# Set the identity to 'new group 2'
+Idents(gbm2) <- "new group 2"
+
+# Verify the identity
+table(Idents(gbm2))
+
+# Subset the Seurat object
+gbm_subset <- subset(gbm2, idents = c("Neural Environment", "Non Neural Environment"))
+
+# Verify the subsetting
+table(Idents(gbm_subset))
+
+# Scale the data for the subsetted object
+gbm_subset <- ScaleData(gbm_subset)
+
+# Find top 100 variable genes
+gbm_subset <- FindVariableFeatures(gbm_subset, nfeatures = 100)
+top_variable_genes <- VariableFeatures(gbm_subset)
+
+# Check if all genes in top_variable_genes are in scale.data
+missing_genes <- setdiff(top_variable_genes, rownames(GetAssayData(gbm_subset, slot = "scale.data")))
+print(missing_genes)
+
+# Filter top_variable_genes to include only valid genes
+valid_genes <- intersect(top_variable_genes, rownames(GetAssayData(gbm_subset, slot = "scale.data")))
+
+# Extract scaled data for valid genes
+heatmap_data <- GetAssayData(gbm_subset, slot = "scale.data")[valid_genes, ]
+
+# Create column annotations
+annotation_col <- data.frame(
+  Environment = Idents(gbm_subset)  # Use the identity for annotations
+)
+rownames(annotation_col) <- colnames(heatmap_data)
+
+# Create the heatmap
+pheatmap(heatmap_data,
+         color = colorRampPalette(c("blue", "white", "red"))(100),  # Color gradient
+         cluster_rows = TRUE,  # Cluster rows (genes)
+         cluster_cols = FALSE,  # Do not cluster columns (force grouping by environment)
+         show_rownames = TRUE,  # Show row names (genes)
+         show_colnames = FALSE,  # Hide column names (cells)
+         annotation_col = annotation_col,  # Add column annotations
+         fontsize_row = 8,  # Font size for row names
+         main = "Neural Environment vs. Non-Neural Environment")  # Title
