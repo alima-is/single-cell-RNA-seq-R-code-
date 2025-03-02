@@ -1,0 +1,25 @@
+
+gbm <- readRDS("C:/Work docs/bioturing DEG tsvs/4b47b9d27fba44198698f1c451a68f46_BRONWYN_DATA_II.rds")
+
+library(Seurat)
+gbm <- SetIdent(gbm, value = gbm@meta.data$`new group 2`)
+
+identities_of_interest <- c("GB Control Cells", "GB Cells Invading Neural Environment", "GB Cells Invading Non Neural Environment")
+filtered_gbm <- subset(gbm, idents = identities_of_interest)
+
+allgenes <- c("SOX2", "OLIG2", "NES", "TRRAP", "NANOG", "ID1",
+              "MKI67", "PCNA", "CCNE1", "CCND1", "CCNA2", "TOP2A",
+              "MMP9", "MMP2", "CDH2", "TGFB1", "FSCN1", "COL1A1",
+              "VIM", "CD44", "SERPINE1", "NF1", "STAT3", "TWIST1")
+allgenes_plot +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+allgenes_plot +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  # Add vertical lines for partitions (adjusted to be equidistant between dots)
+  geom_vline(xintercept = c(6.5, 12.5, 18.5), linetype = "dashed", color = "darkgray") +
+  # Add labels at the top of the plot
+  annotate("text", x = 3, y = Inf, label = "Stemness", vjust = 2, size = 5, fontface = "bold") +
+  annotate("text", x = 9, y = Inf, label = "Proliferation", vjust = 2, size = 5, fontface = "bold") +
+  annotate("text", x = 15, y = Inf, label = "Invasion", vjust = 2, size = 5, fontface = "bold") +
+  annotate("text", x = 21, y = Inf, label = "Mesenchymal", vjust = 2, size = 5, fontface = "bold")
