@@ -1,0 +1,22 @@
+DimPlot(gbm_subset)
+library(SingleR)
+library(celldex)
+ref <- celldex::HumanPrimaryCellAtlasData()
+View(as.data.frame(colData(ref)))
+gbmenv_counts <- GetAssayData(gbm_subset, slot = 'counts')
+pred <- SingleR(test = gbmenv_counts,
+        ref = ref, 
+        labels = ref$label.main)
+
+gbm_subset$singleR.labels <- pred$labels[match(rownames(gbm_subset@meta.data), rownames(pred))]
+DimPlot(gbm_subset, group.by = 'singleR.labels')
+
+# annotation diagnostics
+install.packages("viridis")
+library(viridis)
+pred$scores
+plotScoreHeatmap(pred)
+plotDeltaDistribution(pred)
+
+tab <- table(Assigned=pred$labels, Clusters=gbm_subset$`new group 2`)
+pheatmap(log10(tab+10), color = colorRampPalette(c('white','blue'))(10))
