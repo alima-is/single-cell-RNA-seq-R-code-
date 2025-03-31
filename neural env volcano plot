@@ -1,0 +1,119 @@
+# Galaxy settings start ---------------------------------------------------
+
+# setup R error handling to go to stderr
+options(show.error.messages = F, error = function() {cat(geterrmessage(), file = stderr()); q("no", 1, F)})
+
+# we need that to not crash galaxy with an UTF8 error on German LC settings.
+loc <- Sys.setlocale("LC_MESSAGES", "en_US.UTF-8")
+
+# Galaxy settings end -----------------------------------------------------
+
+# Load packages -----------------------------------------------------------
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+  library(ggrepel)
+})
+
+neural_env <- readr::read_tsv("neural env .invaded neural env-neural env .tsv")
+readr::read_tsv()
+list.files()
+# Import data  ------------------------------------------------------------
+
+# Auto-detect header by checking if P value column is numeric or not
+first_line <- read.delim('/corral4/main/objects/f/6/a/dataset_f6a8dbf4-0215-4628-887a-82dd3f138a33.dat', header = FALSE, nrow = 1)
+first_pvalue <- first_line[, 5]
+if (is.numeric(first_pvalue)) {
+  print("No header row detected")
+  results <- read.delim('/corral4/main/objects/f/6/a/dataset_f6a8dbf4-0215-4628-887a-82dd3f138a33.dat', header = FALSE)
+} else {
+  print("Header row detected")
+  results <- read.delim('/corral4/main/objects/f/6/a/dataset_f6a8dbf4-0215-4628-887a-82dd3f138a33.dat', header = TRUE)
+}
+
+# Format data  ------------------------------------------------------------
+neural_env$`p-value`[neural_env$`p-value`== 0] <- 1e-305
+neural_env$fdr[neural_env$fdr == 0] <- 1e-305
+# Create columns from the column numbers specified
+results <- neural_env %>% mutate(fdr = .[[4]],
+                                    pvalue = .[[5]],
+                                    logfc = .[[2]],
+                                    labels = .[[1]])
+
+# Get names for legend
+down <- unlist(strsplit('Down,Not Sig,Up', split = ","))[1]
+notsig <- unlist(strsplit('Down,Not Sig,Up', split = ","))[2]
+up <- unlist(strsplit('Down,Not Sig,Up', split = ","))[3]
+
+# Set colours
+colours <- setNames(c("cornflowerblue", "grey", "firebrick"), c(down, notsig, up))
+
+# Create significant (sig) column
+results <- mutate(results, sig = case_when(
+  fdr < 0.05 & logfc > 1.0 ~ up,
+  fdr < 0.05 & logfc < -1.0 ~ down,
+  TRUE ~ notsig))
+
+# Specify genes to label --------------------------------------------------
+
+# Get top genes by P value
+# top <- slice_min(results, order_by = fdr, n = 15)
+# Extract into vector
+#toplabels <- pull(top, labels)
+# Label just the top genes in results table
+# results <- mutate(results, labels = ifelse(labels %in% toplabels, labels, ""))
+
+# Specify genes to label
+genes_to_label <- c("CDKN2A", "MT3", "SPARCL1", "LGALS3", "C1ORF61", "CRYAB", 
+                    "UNCX", "S100A6", "S100A1", "SNHG25")
+
+# Label just the specified genes in the results table
+results <- mutate(results, labels = ifelse(labels %in% genes_to_label, labels, ""))
+
+# Create plot -------------------------------------------------------------
+
+# Set up base plot
+p <- ggplot(data = results, aes(x = logfc, y = -log10(fdr))) +
+  geom_point(aes(colour = sig)) +
+  scale_color_manual(values = colours) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black"),
+        legend.key = element_blank())
+
+
+# Add gene labels
+
+p <- p + ggtitle('Neural Environment Vs. Invaded Neural Environment') +   
+  theme(plot.title = element_text(size = 15))
+
+
+p <- p + xlab('Log2FC') +
+  theme(axis.title.x = element_text(size = 15))  # Increase x-axis label size
+
+p <- p + ylab('-log10FDR') +
+  theme(axis.title.y = element_text(size = 15))  # Increase y-axis label size
+
+# Set legend title
+p <- p + guides(color = guide_legend(title = 'Expression')) +
+  theme(legend.title = element_text(size = 12),  # Increase legend title size
+        legend.text = element_text(size = 12)) 
+
+# Add vertical lines at log2fc = 1 and log2fc = -1
+p <- p + geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black")
+
+
+p <- p + geom_label_repel(data = filter(results, labels != ""), aes(label = labels),
+                          min.segment.length = 0,
+                          max.overlaps = Inf,
+                          size = 5)
+
+
+# Add vertical lines at log2fc = 1 and log2fc = -1
+p <- p + geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black")
+
+
+# Print plot
+print(p)
