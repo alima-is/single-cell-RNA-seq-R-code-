@@ -1,0 +1,47 @@
+## reclustering environment cells to get heatmap
+library(Seurat)
+gbm <- readRDS("C:/Work docs/bioturing DEG tsvs/4b47b9d27fba44198698f1c451a68f46_BRONWYN_DATA_II.rds")
+gbm <- SetIdent(gbm, value = gbm@meta.data$`new group 2`)
+gbm_subset <- subset(gbm, idents = c("Neural Environment", "Non Neural Environment"))
+
+# normalize
+gbm_subset <- NormalizeData(gbm_subset, normalization.method = 'LogNormalize', scale.factor = 10000)
+
+# highly variable features
+gbm_subset <- FindVariableFeatures(gbm_subset, selection.method = 'vst', nfeatures = 2000)
+
+# scale data
+all.genes <- rownames(gbm_subset)
+gbm_subset <- ScaleData(gbm_subset, features = all.genes)
+
+# perform PCA - linear dimensional reduction
+gbm_reclus <- RunPCA(gbm_subset, features = VariableFeatures(object = gbm_subset))
+print(gbm_reclus[["pca"]], dims = 1:5, nfeatures = 5)
+DimPlot(gbm_reclus, reduction = "pca") + NoLegend()
+DimHeatmap(gbm_reclus, dims = 1, cells = 500, balance = TRUE)
+DimHeatmap(gbm_reclus, dims = 1:15, cells = 500, balance = TRUE)
+
+# elbow plot, variation to find optimal number of clusters
+ElbowPlot(gbm_reclus) # pca 1:19
+
+
+# cluster cells
+gbm_reclus <- FindNeighbors(gbm_reclus, dims = 1:19)
+gbm_reclus <- FindClusters(gbm_reclus, resolution = 1)
+
+# run UMAP - non-linear dimensional reduction
+gbm_reclus <- RunUMAP(gbm_reclus, dims = 1:19)
+DimPlot(gbm_reclus, reduction = 'umap') # 17 clusters
+
+# finding differentially expressed features - cluster biomarkers
+gbm.markers <- FindAllMarkers(gbm_reclus, only.pos = TRUE)
+gbm.markers %>%
+  group_by(cluster) %>%
+  dplyr::filter(avg_log2FC > 1)
+
+gbm.markers %>%
+  group_by(cluster) %>%
+  dplyr::filter(avg_log2FC > 1) %>%
+  slice_head(n = 10) %>%
+  ungroup() -> top10
+DoHeatmap(gbm_reclus, features = top10$gene) + NoLegend()
