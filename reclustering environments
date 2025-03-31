@@ -1,5 +1,8 @@
 ## reclustering environment cells to get heatmap
 library(Seurat)
+library(dplyr)
+library(tidyverse)
+library(SingleR)
 gbm <- readRDS("C:/Work docs/bioturing DEG tsvs/4b47b9d27fba44198698f1c451a68f46_BRONWYN_DATA_II.rds")
 gbm <- SetIdent(gbm, value = gbm@meta.data$`new group 2`)
 gbm_subset <- subset(gbm, idents = c("Neural Environment", "Non Neural Environment"))
@@ -39,9 +42,48 @@ gbm.markers %>%
   group_by(cluster) %>%
   dplyr::filter(avg_log2FC > 1)
 
+# plot top 5 per cluster
 gbm.markers %>%
   group_by(cluster) %>%
   dplyr::filter(avg_log2FC > 1) %>%
-  slice_head(n = 10) %>%
-  ungroup() -> top10
-DoHeatmap(gbm_reclus, features = top10$gene) + NoLegend()
+  slice_head(n = 5) %>%
+  ungroup() -> top5
+DoHeatmap(gbm_reclus, features = top5$gene) + NoLegend()
+
+# cell annotation
+ref <- celldex::HumanPrimaryCellAtlasData()
+view(as.data.frame(colData(ref)))
+gbm_env_counts <- GetAssayData(gbm_reclus, slot = 'counts')
+pred <- SingleR(test = gbm_env_counts, 
+                ref = ref, 
+                labels = ref$label.main)
+pred
+rownames(pred)[1:5]
+seu2 <- AddMetaData(gbm_reclus, pred$pruned.labels, col.name = "HCA2")
+seu2 <- SetIdent(seu2,value = 'HCA2')
+DimPlot(seu2, label = T, repel = T, label.size = 3, reduction = 'umap')
+
+### version 2
+install.packages("scran")
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("scran")
+library(scran)
+pred2 <- SingleR(test = gbm_env_counts, # we could also use sce or raw_counts
+                  ref = ref, 
+                  labels = ref$label.main,
+                  de.method = 'wilcox')
+                 
+pred2
+plotScoreHeatmap(pred2)
+
+
+# add to seurat object
+rownames(pred2)[1:5] # make sure you have cell IDs
+seu <- AddMetaData(gbm_reclus, pred2$pruned.labels, col.name = 'SingleR_HCA')
+# Visualise them on the UMAP
+seu <- SetIdent(seu, value = "SingleR_HCA")
+DimPlot(seu, label = T , repel = T, label.size = 3, reduction = 'umap') + NoLegend()
+
+
