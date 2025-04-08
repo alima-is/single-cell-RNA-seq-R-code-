@@ -1,0 +1,212 @@
+# 1. Preparing TCGA-GBM dataset-------------------------------------------------
+install.packages("purrr")
+library(purrr)
+library(TCGAbiolinks)
+library(xml2)
+library(SummarizedExperiment)
+library(dplyr)
+
+getProjectSummary('TCGA-GBM')
+
+# Query to get the dataset clinical files
+query <- GDCquery(
+  project = "TCGA-GBM",
+  data.category = "Clinical",
+  data.type = "Clinical Supplement",
+  data.format = "bcr xml"
+)
+
+# Download the files 
+GDCdownload(query)
+
+# Read XML files
+xml_files <- list.files("GDCdata", pattern = "\\.xml$", full.names = TRUE, recursive = TRUE)
+
+# Get specific clinical data
+# Function to extract the wanted categories from the files
+extract_clinical_data <- function(xml_file) {
+  xml_data <- read_xml(xml_file)
+  tibble(
+    bcr_patient_barcode = xml_text(xml_find_first(xml_data, "//*[local-name()='bcr_patient_barcode']")),
+    days_to_recurrence = xml_text(xml_find_first(xml_data, "//*[local-name()='days_to_new_tumor_event_after_initial_treatment']")),
+    days_to_last_followup = xml_text(xml_find_first(xml_data, "//*[local-name()='days_to_last_followup']")),
+    days_to_death = xml_text(xml_find_first(xml_data, "//*[local-name()='days_to_death']")),
+    vital_status = xml_text(xml_find_first(xml_data, "//*[local-name()='vital_status']"))
+  ) %>% 
+    mutate(across(everything(), ~ ifelse(. == "", NA, .)))  # Convert empty strings to NA
+}
+
+clinical_df <- map_dfr(xml_files, extract_clinical_data)
+nrow(clinical_df)
+# 602
+
+# Remove duplicates and cases with no vital_status
+clinical_df <- clinical_df %>%
+  mutate(
+    days_to_recurrence = as.numeric(days_to_recurrence),
+    days_to_last_followup = as.numeric(days_to_last_followup),
+    days_to_death = as.numeric(days_to_death)
+  ) %>%  mutate(
+    days_to_death = days_to_death,  # Average days in a month
+    days_to_last_followup = days_to_last_followup,
+    days_to_recurrence = days_to_recurrence
+  ) %>% 
+  group_by(bcr_patient_barcode) %>% 
+  reframe(
+    vital_status = dplyr::first(na.omit(vital_status)), 
+    days_to_last_followup = dplyr::first(na.omit(days_to_last_followup)),
+    days_to_death = dplyr::first(na.omit(days_to_death)),
+    days_to_recurrence = dplyr::first(na.omit(days_to_recurrence)),
+    recurrence = ifelse(all(is.na(days_to_recurrence)), NA, "recurrence")
+  ) %>%
+  ungroup() %>%
+  filter(!is.na(vital_status))
+
+# Checking the number of cases left after filtering
+nrow(clinical_df)
+# 594
+
+# Create necessary survival variables
+# Adding columns for overall survival, recurrence, progression events and censoring
+clinical_df <- clinical_df %>%
+  mutate(
+    # Define Progression-Free Survival (PFS) time and event (recurrence or death = event)
+    pfs_time = pmin(days_to_recurrence, days_to_death, days_to_last_followup, na.rm = TRUE),
+    pfs_event = ifelse(!is.na(days_to_recurrence) | vital_status == "Dead", 1, 0), # 1 = event, 0 = censored
+    # Define Overall Survival (OS) time and event (death = event)
+    os_time = pmin(days_to_death, days_to_last_followup, na.rm = TRUE),
+    os_event = ifelse(vital_status == "Dead", 1, 0),
+    # Define Recurrence Probability (Recurrence-Free Survival) (recurrence = event)
+    recurrence_event = ifelse(!is.na(days_to_recurrence), 1, 0),
+    recurrence_time = ifelse(recurrence_event == 1, days_to_recurrence, days_to_last_followup)
+  )
+
+
+# Query RNA-Seq expression data for GBM
+query_gbm <- GDCquery(
+  project = "TCGA-GBM",
+  data.category = "Transcriptome Profiling",
+  experimental.strategy = "RNA-Seq",
+  data.type = 'Gene Expression Quantification')
+
+
+# Get barcodes from gbm samples
+output_gbm <- getResults(query_gbm)
+tumor <- output_gbm$cases
+
+GDCdownload(query_gbm)
+
+tcga_gbm_data <- GDCprepare(query_gbm, summarizedExperiment = TRUE)
+
+# VST transform counts 
+gbm_matrix <- assay(tcga_gbm_data, "unstranded")
+gene_metadata <- as.data.frame(rowData(tcga_gbm_data))
+coldata <- as.data.frame(colData(tcga_gbm_data))
+
+# Differential expression analysis
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix(countData = gbm_matrix,
+                              colData = coldata,
+                              design = ~ 1)
+
+# Filter genes with low counts
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+
+# Apply variance stabilizing transformation
+vsd <- vst(dds, blind=FALSE)
+gbm_matrix_vst <- assay(vsd) 
+
+## Survival analysis for each gene in the 59-gene signature ----------
+library(tidyr)
+gene_list2 <- c("SDC1", "SLC2A3", "CD44", "FOXM1", "RRM2", "TK1", "ASFB1", "KIF11", "HIST1H2BF", "HIST1H3C")
+
+# Filter the dataframe for the genes in the gene list
+library(tibble)
+gbm_matrix_df <- gbm_matrix_vst %>% 
+  as.data.frame() %>%
+  rownames_to_column(var = 'gene_id') %>%
+  gather(key = "case_id", value = "counts", -gene_id) %>%
+  left_join(., gene_metadata, by = "gene_id") %>%
+  filter(gene_name %in% gene_list2)
+
+# changing name 
+gbm_data <- gbm_matrix_df
+
+gbm_data$case_id <- gsub('-01.*', '', gbm_data$case_id)
+gbm_data$case_id <- sub("^(TCGA-\\d{2}-\\d{4})-.*", "\\1", gbm_data$case_id)
+
+
+# Create a high/low expression strata based on median expression for each gene
+gbm_data <- gbm_data %>%
+  group_by(gene_name) %>%
+  mutate(strata = ifelse(counts >= median(counts), "HIGH", "LOW"))
+
+# combine dfs
+gbm_data <- merge(gbm_data, clinical_df , by.x = 'case_id', by.y = 'bcr_patient_barcode')
+
+#Overall Survival Analysis -------------------
+library(survminer)
+library(survival)
+
+fit_overall <- survfit(Surv(os_time, os_event) ~ strata, data = gbm_data)
+
+
+# p-value
+surv_pvalue(fit_overall)
+
+# Create survival plot with risk table, confidence intervals, and styled legend
+ggsurv <- ggsurvplot(
+  fit_overall, 
+  data = gbm_data, 
+  pval = "p = 0.00171",
+  pval.coord = c(1500, 0.4),         # Adjust p-value position               # Add risk table
+  legend = c(0.8, 0.8),             # Legend position
+  legend.labs = c("High IGI sig", "Low IGI sig"),
+  legend.title = "Expression",      # Add legend title
+  font.legend = 12,                 # Make legend font bigger
+  xlab = "Time (Days)",
+  ggtheme = theme_bw() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      panel.grid = element_blank()
+    )
+)
+
+# Add two-line title to the plot
+ggsurv$plot <- ggsurv$plot + 
+  ggtitle(expression(atop(
+    "10 Hub Gene Signature - TCGA-GBM", 
+    "Overall Survival"
+  )))
+
+# Print the full plot with risk table
+ggsurv
+
+### with risk table, confidence intervals and cox regression
+ggsurv <- ggsurvplot(
+  fit_overall, 
+  data = gbm_data, 
+  pval = "p-value = 0.00171",
+  pval.coord = c(500, 0.95),
+  risk.table = TRUE,         # ➕ Adds the risk table below the plot
+  legend = c(0.8, 0.8),
+  legend.labs = c("High IGI sig", "Low IGI sig"),
+  legend.title = "Expression",  # ➕ Title for the legend
+  xlab = "Time (Days)",
+  conf.int = TRUE, 
+  surv.median.line = "hv",
+  ggtheme = theme_bw() +  
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      legend.title = element_text(size = 14),    # ➕ Bigger legend title
+      legend.text = element_text(size = 12),     # ➕ Bigger legend labels
+      panel.grid = element_blank()
+    )
+)
+
+ggsurv
+
+# Run Cox regression
+cox_model <- coxph(Surv(os_time, os_event) ~ strata, data = gbm_data)
+summary(cox_model)
